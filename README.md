@@ -23,14 +23,14 @@ The assignment requires a unique sample of 400 observations for training, with t
 
 | File | Description |
 |---|---|
-| Excel dataset (`.xlsx` or `.xls`) | Contains the Boston property data used for analysis |
+| Boston,my_boston(`.xlsx` or `.xls`) | Contains the Boston property data used for analysis |
 | `boston_vars.txt` | Describes the dataset variables and their meanings |
 | RStudio project (`.Rproj`) | Opens the project in RStudio |
 | Quarto source (`.qmd`) | Contains the report, R code, analysis, and interpretations |
 | HTML report (`.html`) | Rendered, browser-readable version of the report |
 | PDF report (`.pdf`) | Portable version of the completed report |
 
-*Replace the example variable filename or file extensions above if your actual filenames differ.*
+
 
 ## Project Objectives
 
