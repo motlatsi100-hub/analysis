@@ -1,0 +1,768 @@
+---
+format: pdf
+editor: visual
+---
+
+\begin{titlepage}
+\centering
+
+\vspace*{2cm}
+
+{\Huge\bfseries Predicting Median Home Value in Boston\par}
+
+\vspace{1.5cm}
+
+{\Large Motlatsi Seeko\par}
+
+{\large Student Number: SKXMOT001\par}
+
+\vspace{1cm}
+
+{\large Course: Supervised Learning\par}
+
+{\large Department of Statistical Science\par}
+
+\vspace{1.5cm}
+
+{\large University of Cape Town\par}
+
+\vfill
+
+{\large May 1st, 2026\par}
+
+\end{titlepage}
+
+------------------------------------------------------------------------
+
+```{r}
+#| echo: false
+#| include: FALSE
+library(tidyverse)
+library(glmnet)
+library(corrplot)
+library(gridExtra)
+library(knitr)
+library(kableExtra)
+```
+
+```{r}
+#| echo: false 
+#| include: FALSE
+rm(list=ls())
+dat1<- read.csv("boston.csv", header=T)
+head(dat1)
+ 
+
+
+```
+
+# introduction
+
+This study focuses on modelling and predicting the median value of owner-occupied homes (measured in \$1000s) across suburbs in Boston using a well-known dataset consisting of 506 observations and 12 explanatory variables. These variables capture a range of socioeconomic, environmental, and structural characteristics that may influence housing prices.
+
+The primary objective of this analysis is to develop and compare multiple statistical models to accurately predict housing values while identifying the most influential predictors. To achieve this, a structured data analysis pipeline was followed, beginning with Exploratory Data Analysis (EDA). This stage involved assessing the dataset’s structure, confirming the number and types of variables, and checking for missing values to ensure data quality. Various visualization techniques, including histograms, box plots, and scatter plots, were employed to understand the distribution of variables and their relationships with the target variable. Additionally, correlation analysis was conducted to quantify the strength and direction of linear relationships between predictors and housing prices.
+
+Following the EDA, the dataset was partitioned into training and testing subsets to enable robust model evaluation and to avoid overfitting. Several predictive modelling approaches were then implemented. A baseline model using multiple linear regression was first established, providing a foundation for comparison. Model selection techniques based on Akaike Information Criterion (AIC) and Bayesian Information Criterion (BIC) were applied to identify more parsimonious models that balance goodness-of-fit with model complexity. Furthermore, regularization methods, specifically Ridge and LASSO regression, were employed to address potential multicollinearity and improve model generalization by penalizing large coefficients.
+
+To evaluate model performance, the Mean Squared Error (MSE) was computed for each model on the test dataset. This allowed for a quantitative comparison of predictive accuracy across the different approaches. By comparing these models, the study aims to determine which method provides the best balance between interpretability and predictive performance.
+
+\newpage
+
+## Exploratory data analysis
+
+```{r}
+#| echo: false
+#| include: false
+set.seed(2565)
+data <- dat1[sample(1:nrow(dat1), 400, replace = FALSE), ]#
+write.csv(data, 'my_boston.csv', row.names = FALSE)  # save training set
+
+#Extract test set (remaining rows)
+set.seed(2565)  # same seed to reproduce exact same sampled rows
+sampled_rows <- sample(1:nrow(dat1), 400, replace = FALSE)
+train <- dat1[sampled_rows, ]   # your 400 training rows
+test  <- dat1[-sampled_rows, ]  # remaining 106 test rows
+
+#Verify datasets
+nrow(train) 
+nrow(test)   
+```
+
+```{r}
+#| echo: false
+#| include: false
+#check the dataset and identify any missing values
+str(train)
+dim(train)
+summary(train)
+colSums(is.na(train))
+```
+
+```{r}
+#| echo: false
+#| include: TRUE
+#| label: tbl-summary
+#| tbl-cap: "Summary Statistics of Predictors"
+
+
+#table for all the summaryt statistics for all the variables
+sum_table <- as.data.frame(sapply(train, summary))
+sum_table <- t(sum_table)
+sum_table <- as.data.frame(sum_table)
+colnames(sum_table) <- c("Min", "Q1", "Median", "Mean", "Q3", "Max")
+sum_table <- round(sum_table, 4)
+kable(sum_table, caption = "")
+```
+
+@tbl-summary above presents the summary statistics for all variables in the training set. The response variable mdev ranges from \$5,000 to \$50,000 with a mean of \$22,760, reflecting moderate variability in home values across suburbs. The predictor crim is notably right-skewed, with a median of 0.23 and a maximum of 88.98, indicating the presence of high-crime outlier suburbs. Similarly, zn has a median of zero, suggesting most suburbs have no large residential lots zoned. The variable age has a mean of 67.87, implying that the majority of suburbs consist of older housing stock. The binary variable chas has a mean of 0.07, confirming that only approximately 7% of suburbs border the Charles River. The summary statistics reveal considerable variation across predictors, with evidence of skewness in several variables that may warrant attention during modelling.
+
+```{r}
+#| echo: false
+#| include: true
+#| label: fig-histogram
+#| fig-cap: "Distribution of Quantitative Variables"
+#| fig-width: 8
+#| fig-height: 6
+
+#histogram of qauntitatative variables
+quant_vars <- c("crim", "zn", "indus", "nox", "rm", "age",
+                "dis", "tax", "ptratio", "lstat", "medv")
+
+# Convert to long format for facet_wrap
+train_long <- train |>
+  dplyr::select(all_of(quant_vars)) |>
+  pivot_longer(cols = everything(), names_to = "variable", values_to = "value")
+
+# Single plot with all histograms
+ggplot(train_long, aes(x = value)) +
+  geom_histogram(fill = "steelblue", color = "white", bins = 30) +
+  facet_wrap(~ variable, scales = "free") +
+  labs(title = "Distribution of Quantitative Variables",
+       x = NULL, y = "Frequency") +
+  theme_minimal()
+```
+
+The distributions of all 11 quantitative variables in the training set are shown in @fig-histogram below. Several variables exhibit strong right skewness, most notably crim, zn, and lstat, where the majority of observations are concentrated at low values with long tails extending rightward indicating the presence of outlier suburbs with very high crime rates, large zoned lots, and high proportions of lower-status residents respectively.
+
+The variable tax shows a bimodal distribution with two distinct clusters, suggesting two groups of suburbs with markedly different tax rate regimes. Similarly, patratio is left-skewed with most suburbs concentrated at higher pupil-teacher ratios around 20. The variables rm and medv approximate a roughly normal distribution, while age and nox are moderately left-skewed, indicating that older properties and higher pollution levels are more prevalent across suburbs. The variable dis is right-skewed, with most suburbs located relatively close to employment centers.
+
+```{r}
+#| echo: false
+#| include: TRUE
+#| label: fig-barplot
+#| fig-cap: "Distribution of Categorical Variables"
+#| fig-width: 4
+#| fig-height: 3
+#| message: false
+#distribution of the categorical variables
+cat_vars <- c("chas", "rad")
+
+# Convert to long format for facet_wrap
+train_long_cat <- train |>
+  dplyr::select(all_of(cat_vars)) |>
+  mutate(across(everything(), as.factor)) |>
+  pivot_longer(cols = everything(), names_to = "variable", values_to = "value")
+
+# Single plot with both bar charts
+ggplot(train_long_cat, aes(x = value)) +
+  geom_bar(fill = "coral", color = "white") +
+  facet_wrap(~ variable, scales = "free") +
+  labs(title = "Distribution of Categorical Variables",
+       x = NULL, y = "Count") +
+  theme_minimal()
+```
+
+@fig-barplot below shows that chas is highly imbalanced with approximately 93% of suburbs not bordering the Charles River. For rad, suburbs cluster at indices 4, 5, and 24, with the spike at index 24 suggesting a distinct group of suburbs with exceptionally high highway accessibility.
+
+```{r}
+#| echo: false
+#| label: fig-scatter_plots
+#| fig-cap: "Scatter Plots of Predictors vs Median Home Value"
+#| fig-width: 8
+#| fig-height: 5
+#| message: false
+predictors <- setdiff(quant_vars, "medv")  # exclude target
+
+# Reshape to long format
+train_scatter <- train |>
+  dplyr::select(all_of(c(predictors, "medv"))) |>
+  pivot_longer(cols = all_of(predictors), 
+               names_to = "variable", 
+               values_to = "value")
+
+# Single panel with all scatter plots
+ggplot(train_scatter, aes(x = value, y = medv)) +
+  geom_point(alpha = 0.4, color = "steelblue", size = 0.8) +
+  geom_smooth(method = "lm", color = "red", se = TRUE) +
+  facet_wrap(~ variable, scales = "free_x") +
+  labs(title = "Scatter Plots of Predictors vs Median Home Value",
+       x = NULL, y = "Median Home Value ($1000s)") +
+  theme_minimal() +
+  theme(strip.text = element_text(face = "bold"))
+```
+
+The relationship between each quantitative predictor and the response variable is shown @fig-scatter_plots below. The variables rm and lstat show the strongest relationships with response variable, rm has a clear positive linear relationship, indicating that suburbs with more rooms per dwelling tend to have higher home values, while lstat shows a strong negative relationship, confirming that higher proportions of lower-status residents are associated with lower home values. The variables nox, crim, ptratio, and dis also show negative associations with medv, suggesting that higher pollution, crime, pupil-teacher ratios, and distance from employment centres reduce home values. The variables age, indus, and tax show weak to moderate negative trends, while zn shows a weak positive relationship, this suggest that most predictors have a meaningful linear relationship with response variable, justifying their inclusion in the regression model.
+
+```{r}
+#| echo: false
+#| label: fig-boxplot
+#| fig-cap: "Boxplots of quantitative variables in the training set."
+#| fig-width: 8
+#| fig-height: 4
+# Convert to long format for facet_wrap
+train_long_box <- train |>
+  dplyr::select(all_of(quant_vars)) |>
+  pivot_longer(cols = everything(), names_to = "variable", values_to = "value")
+
+# Boxplots for all quantitative variables
+ggplot(train_long_box, aes(x = variable, y = value)) +
+  geom_boxplot(fill = "tomato", alpha = 0.6, 
+               outlier.color = "red", outlier.size = 1.5) +
+  facet_wrap(~ variable, scales = "free") +
+  labs(title = "Boxplots of Quantitative Variables (Outlier Detection)",
+       x = NULL, y = NULL) +
+  theme_minimal()
+```
+
+As shown in @fig-boxplot above crim exhibits the most severe outliers, with several suburbs recording extremely high crime rates far beyond the upper whisker, consistent with the right skewness observed in the histograms. Similarly, zn, lstat, rm, and dis contain notable outliers, while medv shows a few high-value outliers at the upper end, suggesting some suburbs with exceptionally high home values. The variables age, indus, nox, and ptratio appear relatively well-behaved with few or no extreme outliers. The variable tax shows a wide interquartile range, reflecting the two distinct tax rate clusters observed earlier in the histogram.
+
+These outliers particularly in crim and zn may influence regression coefficient estimates, potentially inflating standard errors and distorting predictions.
+
+```{r}
+#| include: FALSE
+#| echo: false
+#| message: false
+ggplot(train, aes(x = as.factor(chas), y = medv, fill = as.factor(chas))) +
+  geom_boxplot() +
+  labs(title = "medv by Charles River (chas)",
+       x = "Borders River (0=No, 1=Yes)",
+       y = "Median Home Value ($1000s)") +
+  scale_fill_manual(values = c("steelblue", "coral")) +
+  theme_minimal()
+```
+
+```{r}
+#| echo: false
+#| label: fig-correlation
+#| fig-cap: "Correlation heatmap showing the strength and direction of relationships among variables in the Boston housing dataset."
+#| fig-width: 8
+#| fig-height: 4
+cor_matrix <- cor(train[quant_vars])
+
+corrplot(cor_matrix,
+         method = "color",
+         type = "full",
+         tl.cex = 0.8,
+         addCoef.col = "white",
+         number.cex = 0.6,
+         title = "Correlation Matrix — Boston Training Set",
+         mar = c(0, 0, 1, 0))
+
+```
+
+@fig-correlation below presents the correlation matrix for all quantitative variables in the training set. The strongest correlations with response are observed for lstat (r = −0.74) and rm (r = 0.69), confirming these as the most influential predictors of median home value. Among the predictors, notable multicollinearity exists between rad and tax (r = 0.59), nox and dis (r = −0.77), and indus and nox (r = 0.77). This multicollinearity suggests that some predictors carry redundant information, which can inflate standard errors and destabilise coefficient estimates in ordinary least squares regression. This further motivates the use of regularization techniques such as Ridge and LASSO
+
+## 
+
+## Model building
+
+### Linear regression model {#sec-linear-regression-model}
+
+```{r}
+#| include: true
+#| echo: false
+#| label: tbl-fullmodel
+#| tbl-cap: "Full Multiple Linear Regression Model Coefficients"
+
+
+# Fit linear regression model using all predictors on training set
+full_model <- lm(medv ~ ., data = train)
+
+ #prepare to present the coefficients in table form
+# Extract raw coefficients
+coef_table <- as.data.frame(summary(full_model)$coefficients)
+colnames(coef_table) <- c("Estimate", "Std. Error", "t-value", "p-value")
+
+# Format output 
+coef_table$Estimate     <- format(coef_table$Estimate,     digits = 6)
+coef_table$`Std. Error` <- format(coef_table$`Std. Error`, digits = 6)
+coef_table$`t-value`    <- format(coef_table$`t-value`,    digits = 4)
+coef_table$`p-value`    <- format.pval(coef_table$`p-value`, digits = 6)
+
+kable(coef_table, align = "lrrrr", booktabs = TRUE) |>
+  kable_styling(
+    bootstrap_options = c("bordered", "condensed"),
+    full_width = FALSE,
+    position = "center"
+  ) |>
+  row_spec(0, bold = TRUE, background = "#D3D3D3") |>
+  column_spec(1, bold = TRUE, border_right = TRUE)
+
+
+
+```
+
+### 
+
+The full model explains approximately 72% of the variance in median home values (R² = 0.7292, Adjusted R² = 0.7208), with a Residual Standard Error of 4.829 and a highly significant F-statistic of 86.85 on 12 variables and 387 degrees of freedom (p \< 2.2e-16). As shown in @tbl-fullmodel above, most predictors are statistically significant at the 5% level. The variables rm (β = 3.725) and lstat (β = −0.562) are the strongest predictors, consistent with the earlier correlation analysis. However, indus (p = 0.538) and age (p = 0.855) are not statistically significant, suggesting that they add little new information beyond other predictors, this highly supports variable selection for better model performance.
+
+```{r}
+#| include: FALSE
+#| echo: false
+#Predict medv on test set using trained model
+predictions <- predict(full_model, newdata = test)
+
+#Calculate Test MSE
+test_MSE <- mean((test$medv - predictions)^2)
+cat("Test MSE:", round(test_MSE, 4), "\n")
+
+# Calculate Test RMSE 
+test_RMSE <- sqrt(test_MSE)
+cat("Test RMSE:", round(test_RMSE, 4), "\n")
+
+#Calculate Test R-squared
+SS_res <- sum((test$medv - predictions)^2)
+SS_tot <- sum((test$medv - mean(test$medv))^2)
+test_R2 <- 1 - (SS_res / SS_tot)
+cat("Test R-squared:", round(test_R2, 4), "\n")
+```
+
+On the test set, the linear regression model achieved a Test MSE of 22.8473 and Test RMSE of 4.7799, meaning predictions deviate from actual median home values by approximately \$4,780 on average. The Test R² of 0.7394 indicates that the model generalises reasonably well to unseen data, explaining approximately 74% of variance in the test set slightly higher than the training R², suggesting no overfitting. These results serve as the baseline against which all subsequent models are compared.
+
+```{r}
+#| include: FALSE
+#| echo: false
+# Training MSE
+train_predictions <- predict(full_model, newdata = train)
+train_MSE <- mean((train$medv - train_predictions)^2)
+
+cat("Train MSE:", round(train_MSE, 4), "\n")
+cat("Test MSE :", round(test_MSE, 4), "\n")
+cat("Difference:", round(test_MSE - train_MSE, 4), "\n")
+```
+
+The training MSE of 22.5586 and test MSE of 22.8473 of regression model are very close, with a difference of only 0.2887. This minimal gap indicates that the full model generalizes well to unseen data with no evidence of overfitting the model performs almost equally well on both the training and test sets.
+
+## Model improvement
+
+```{r}
+#| include: FALSE
+#| echo: false
+
+# AIC-based Backwards Stepwise 
+model_AIC <- step(full_model, 
+                  direction = "backward", 
+                  k = 2,          # k=2 means AIC penalty
+                  trace = TRUE)   # trace=TRUE shows each step
+
+pred_AIC <- predict(model_AIC, newdata = test)#predicted median home values
+
+
+
+
+```
+
+```{r}
+#| include: true
+#| echo: false
+#| label: tbl-AIC
+#| tbl-cap: "AIC Stepwise Regression Model Coefficients"
+#table of coefficients for AIC
+coef_AIC <- as.data.frame(summary(model_AIC)$coefficients)
+colnames(coef_AIC) <- c("Estimate", "Std. Error", "t-value", "p-value")
+
+coef_AIC$Estimate     <- format(coef_AIC$Estimate,     digits = 6)
+coef_AIC$`Std. Error` <- format(coef_AIC$`Std. Error`, digits = 6)
+coef_AIC$`t-value`    <- format(coef_AIC$`t-value`,    digits = 4)
+coef_AIC$`p-value`    <- format.pval(coef_AIC$`p-value`, digits = 6)
+
+kable(coef_AIC, align = "lrrrr", booktabs = TRUE) |>
+  kable_styling(
+    bootstrap_options = c("bordered", "condensed"),
+    full_width = FALSE,
+    position = "center"
+  ) |>
+  row_spec(0, bold = TRUE, background = "#D3D3D3") |>
+  column_spec(1, bold = TRUE, border_right = TRUE)
+```
+
+The backward stepwise selection using AIC removed indus and age from the full model, retaining 10 predictors as shown in @tbl-AIC above. All remaining predictors are statistically significant at the 5% level, producing a cleaner and more parsimonious model than the full model. The variables rm(β = 3.739) and lstat(β = −0.569) remain the strongest predictors, consistent with previous findings. The variable nox shows a stronger negative effect (β = −18.107) compared to the full model, suggesting that removing indus and age allowed the model to better isolate the effect of air pollution on home values.
+
+The AIC model achieved a Test MSE of 22.5276 and Test RMSE of 4.7457, a marginal improvement over the full model Test MSE of 22.8473, confirming that removing the two insignificant predictors improved generalisation to unseen data.
+
+The AIC stepwise model achieves an R² of 0.7289 and Adjusted R² of 0.7220, marginally improving over the full model (Adjusted R² = 0.7208) despite using two fewer predictors. The Residual Standard Error of 4.819 and a highly significant F-statistic of 104.6 (p \< 2.2e-16) confirm that the model maintains strong predictive performance.
+
+```{r}
+#| echo: false
+#| include: false
+
+#BIC-based Backwards Stepwise
+model_BIC <- step(full_model, 
+                  direction = "backward", 
+                  k = log(nrow(train)),   # means BIC penalty
+                  trace = TRUE)
+pred_BIC <- predict(model_BIC, newdata = test)
+
+
+```
+
+```{r}
+#| echo: false
+#| label: tbl-BIC
+#| tbl-cap: "BIC Stepwise Regression Model Coefficients"
+#table of coefficients for BIC
+coef_BIC <- as.data.frame(summary(model_BIC)$coefficients)
+colnames(coef_BIC) <- c("Estimate", "Std. Error", "t-value", "p-value")
+
+coef_BIC$Estimate     <- format(coef_BIC$Estimate,     digits = 6)
+coef_BIC$`Std. Error` <- format(coef_BIC$`Std. Error`, digits = 6)
+coef_BIC$`t-value`    <- format(coef_BIC$`t-value`,    digits = 4)
+coef_BIC$`p-value`    <- format.pval(coef_BIC$`p-value`, digits = 6)
+
+kable(coef_BIC, align = "lrrrr", booktabs = TRUE) |>
+  kable_styling(
+    bootstrap_options = c("bordered", "condensed"),
+    full_width = FALSE,
+    position = "center"
+  ) |>
+  row_spec(0, bold = TRUE, background = "#D3D3D3") |>
+  column_spec(1, bold = TRUE, border_right = TRUE)
+
+```
+
+As shown in @tbl-BIC above, the BIC stepwise model retained the same 10 predictors as the AIC model, with all predictors statistically significant at the 5% level. The variables rm (β = 3.739, p \< 0.001) and lstat(β = −0.569, p \< 0.001) remain the strongest predictors of median home values, consistent with previous findings.. The variables dis (β = −1.433) and ptraio (β = −0.857) are also strongly negative, suggesting that greater distance from employment centers and higher pupil-teacher ratios reduce home values. The positive coefficients indicate that more rooms, better highway accessibility, more residential zoning, and proximity to the Charles River all increase home values.
+
+The model achieves an R² of 0.7289 and Adjusted R² of 0.7220, with a Residual Standard Error of 4.819 and highly significant F-statistic of 104.6 (p \< 2.2e-16), identical to the AIC model confirming that both criteria converged on the same optimal model.
+
+```{r}
+#| include: FALSE
+#| echo: false
+x_train <- model.matrix(medv ~ ., data = train)[, -1]  # remove intercept column
+y_train <- train$medv
+
+x_test  <- model.matrix(medv ~ ., data = test)[, -1]
+y_test  <- test$medv
+```
+
+```{r}
+#| echo: false
+#| include: false
+
+#Find best lambda using cross-validation
+set.seed(2565)
+cv_ridge <- cv.glmnet(x_train, y_train, 
+                      alpha  = 0,        # alpha=0 means Ridge
+                      nfolds = 10)       # 10-fold cross validation
+
+#Plot CV error vs lambda
+plot(cv_ridge)
+#fig-cap("Ridge - Cross Validation", line = 3)
+
+
+
+# Fit final Ridge model using best lambda
+ridge_model <- glmnet(x_train, y_train, 
+                      alpha  = 0, 
+                      lambda = cv_ridge$lambda.min)
+
+# Ridge coefficients
+cat("\nRidge Coefficients:\n")
+print(coef(ridge_model))
+
+
+
+
+# Predict and calculate Test MSE
+pred_ridge <- predict(ridge_model, newx = x_test)
+
+MSE_ridge  <- mean((y_test - pred_ridge)^2)
+
+```
+
+```{r}
+#| echo: false
+#| include: true
+#| label: fig-ridge-cv
+#| fig-cap: "Ridge Regression 10-Fold Cross-Validation Plot."
+#| fig-width: 6
+#| fig-height: 4
+#Plot CV error vs lambda
+plot(cv_ridge)
+title("Ridge - Cross Validation", line = 3)
+
+```
+
+All 12 predictors are retained with shrunk coefficients compared to the full OLS model. The variables rm and lstat remain the strongest predictors. The variables tax, age, and zn have coefficients close to zero, suggesting limited individual contribution, however Ridge retains them rather than removing them
+
+@fig-ridge-cv above displays the 10-fold cross-validation plot for Ridge regression. The MSE decreases steadily as the penalty parameter λ increases (moving right along the x-axis), reaching its minimum at lambda.min (left dashed line) before slightly increasing at lambda.lst (right dashed line).
+
+```{r}
+#| include: false
+#| echo: false
+
+# Find best lambda using cross-validation
+set.seed(2565)
+cv_lasso <- cv.glmnet(x_train, y_train, 
+                      alpha  = 1,        # alpha=1 means LASSO
+                      nfolds = 10)
+
+# Plot CV error vs lambda
+plot(cv_lasso)
+title("LASSO - Cross Validation", line = 3)
+
+# Best lambda values
+cat("LASSO Best Lambda (min)  :", round(cv_lasso$lambda.min, 4), "\n")
+cat("LASSO Best Lambda (1se)  :", round(cv_lasso$lambda.1se, 4), "\n")
+
+# Fit final LASSO model using best lambda
+lasso_model <- glmnet(x_train, y_train, 
+                      alpha  = 1, 
+                      lambda = cv_lasso$lambda.min)
+
+# LASSO coefficients 
+cat("\nLASSO Coefficients:\n")
+print(coef(lasso_model))
+
+# variables removed by  LASSO 
+lasso_coefs <- coef(lasso_model)
+removed_vars <- rownames(lasso_coefs)[lasso_coefs[, 1] == 0]
+kept_vars    <- rownames(lasso_coefs)[lasso_coefs[, 1] != 0]
+
+
+# Predict and calculate Test MSE
+pred_lasso <- predict(lasso_model, newx = x_test)
+
+MSE_lasso  <- mean((y_test - pred_lasso)^2)
+
+```
+
+```{r}
+#| echo: false
+#| include: true
+#| label: fig-lasso-cv
+#| fig-cap: "lasso Regression 10-Fold Cross-Validation Plot."
+#| fig-width: 6
+#| fig-height: 4
+# Plot CV error vs lambda
+plot(cv_lasso)
+title("LASSO - Cross Validation", line = 3)
+```
+
+@fig-lasso-cv above displays the 10-fold cross-validation plot for LASSO regression. Unlike Ridge, the number of predictors along the top decreases from 12 to 0 as λ increases demonstrating LASSO's key property of shrinking some coefficients to exactly zero, effectively performing automatic variable selection. The MSE decreases steeply at first before flattening, with lambda.min (left dashed line) retaining 8 predictors and lambda.1se (right dashed line) retaining a sparser model. This confirms that LASSO identifies a subset of the most informative predictors while discarding less useful ones.
+
+No variable were removed by this method, all the predictors were used
+
+The penalizing parameter (lambda) for both Ridge and LASSO was selected using 10-fold cross-validation, with lambda chosen as it minimises the average cross-validation MSE. This choice is justified by the primary objective of this analysis ,prediction accuracy as measured by Test MSE. With an observation-to-predictor ratio of 33 (400 observations, 12 predictors), over-fitting risk is low, making lambda.min the most appropriate choice over the more conservative lambda.1st.
+
+```{r}
+#| echo: false
+pred_full <- predict(full_model, newdata = test)
+MSE_full  <- mean((test$medv - pred_full)^2)
+MSE_AIC   <- mean((test$medv - predict(model_AIC, newdata = test))^2)
+MSE_BIC   <- mean((test$medv - predict(model_BIC, newdata = test))^2)
+```
+
+```         
+```
+
+```{r}
+#| echo: false
+#| label: tbl-model-comparison
+#| tbl-cap: "Test MSE Comparison of All Models"
+
+results <- data.frame(
+  Model    = c("Full Model", "AIC Stepwise", "BIC Stepwise", "Ridge", "LASSO"),
+  Test_MSE = c(round(MSE_full,  4),
+               round(MSE_AIC,   4),
+               round(MSE_BIC,   4),
+               round(MSE_ridge, 4),
+               round(MSE_lasso, 4)),
+  Test_RMSE = c(round(sqrt(MSE_full),  4),
+                round(sqrt(MSE_AIC),   4),
+                round(sqrt(MSE_BIC),   4),
+                round(sqrt(MSE_ridge), 4),
+                round(sqrt(MSE_lasso), 4)),
+  Rank = c(5, 1, 1, 4, 3) #ranking models
+)
+#tabilating the models using thier MSE
+kable(results, align = "lrrr", booktabs = TRUE) |>
+  kable_styling(
+    bootstrap_options = c("bordered", "condensed"),
+    full_width = FALSE,
+    position = "center"
+  ) |>
+  row_spec(0, bold = TRUE, background = "#D3D3D3") |>
+  column_spec(1, bold = TRUE, border_right = TRUE) |>
+  row_spec(c(2, 3), background = "#E8F5E9")  # highlight best models
+
+
+
+
+
+
+
+
+
+
+
+
+```
+
+As shown in @tbl-model-comparison above, the AIC and BIC stepwise models achieved the lowest Test MSE of 22.5276 and Test RMSE of 4.7463, outperforming the full model, Ridge, and LASSO. The full model produced the highest Test MSE of 22.8473, reflecting the noise introduced by retaining insignificant predictors indus and age. Ridge (22.8064) and LASSO (22.7649) improved marginally over the full model through coefficient shrinkage, but neither matched the stepwise models.
+
+The AIC Stepwise model is selected as the best model based on the lowest Test MSE of 22.5276. By removing indus and age, the model reduced coefficient variance without introducing bias, achieving the optimal bias-variance trade-off and superior generalization to unseen data.
+
+## 
+
+## Interaction Term
+
+The best model identified in the previous section the AIC Stepwise model was extended by incorporating an interaction term between average number of rooms (rm) and Lower status of the population (lstat) (rm × lstat). This interaction is motivated by the observation that the effect of the number of rooms on median home value is not constant across all neighbourhoods, but rather depends on the socioeconomic status of the neighbourhood (lstat). Specifically, an additional room in a wealthy neighbourhood (low lstat) is expected to add significantly more value to a home than an additional room in a poorer neighbourhood (high lstat). This is supported by the strong individual correlations of both rm (r= 0.69) and lstat (r = −0.74) with medv observed in the correlation analysis, suggesting a meaningful joint effect worth capturing. The interaction term rm × lstat therefore allows the slope of rm on medv to vary as a function of lstat, producing a more flexible and realistic model.
+
+```{r}
+#| include: false
+#| echo: false
+#| results: 'hide'
+# Create interaction term in the data
+train_int <- train
+test_int  <- test
+
+train_int$rm_lstat <- train$rm * train$lstat
+test_int$rm_lstat  <- test$rm  * test$lstat
+
+# Fit AIC Stepwise model with interaction term
+model_AIC_int <- lm(medv ~ crim + zn + chas + nox + rm +
+                           age + dis + rad + tax + ptratio +
+                           lstat + rm:lstat,
+                    data = train_int)
+
+# Summary
+summary(model_AIC_int)
+
+# Predict on test set
+pred_int <- predict(model_AIC_int, newdata = test_int)
+
+# Test MSE and RMSE
+MSE_int  <- mean((test_int$medv - pred_int)^2)
+RMSE_int <- sqrt(MSE_int)
+
+cat("AIC + Interaction Test MSE :", round(MSE_int,  4), "\n")
+cat("AIC + Interaction Test RMSE:", round(RMSE_int, 4), "\n")
+```
+
+The inclusion of the interaction term substantially improved model performance. The R² increased from 0.7289 to 0.7895 and the Adjusted R² from 0.7220 to 0.7830, indicating that the interaction term captures additional variance in median home values not explained by the additive model alone. The Residual Standard Error reduced from 4.819 to 4.257, confirming improved in-sample fit.
+
+Most notably, the Test MSE dropped dramatically from 22.5276 (AIC Stepwise) to 13.5784, with a Test RMSE of 3.6849 meaning predictions are now on average only \$3,685 away from actual home values. This substantial reduction in Test MSE confirms that the interaction between rm and lstat captures a genuine and important relationship in the data , the effect of room size on home value is significantly moderated by neighborhood socioeconomic status, and accounting for this joint effect meaningfully improves predictive performance on unseen data.
+
+```{r}
+#| results: 'hide'
+#| include: false
+#| echo: false
+#residual diagnostic
+
+# Extract fitted values and residuals
+fitted_vals <- fitted(model_AIC_int)
+resid_vals  <- residuals(model_AIC_int)
+
+# Combine into dataframe
+resid_df <- data.frame(
+  fitted    = fitted_vals,
+  residuals = resid_vals
+)
+```
+
+```         
+```
+
+```         
+```
+
+```{r}
+#| include: true
+#| echo: false
+#| label: fig-diagnostic
+#| fig-cap: "Residual diagnostic plots for the AIC Stepwise model with interaction term (rm × lstat)."
+#| fig-width: 7
+#| fig-height: 5
+#| results: 'hide'
+#| message: false
+#residual diagnostic
+
+# Extract fitted values and residuals
+fitted_vals <- fitted(model_AIC_int)
+resid_vals  <- residuals(model_AIC_int)
+
+# Combine into dataframe
+resid_df <- data.frame(
+  fitted    = fitted_vals,
+  residuals = resid_vals
+)
+#Residuals vs Fitted (Linearity) plot
+p1 <- ggplot(resid_df, aes(x = fitted, y = residuals)) +
+        geom_point(alpha = 0.5, color = "steelblue") +
+        geom_hline(yintercept = 0, color = "red", 
+                   linetype = "dashed", linewidth = 1) +
+        geom_smooth(method = "loess", color = "orange", 
+                    se = FALSE) +
+        labs(title = "Residuals vs Fitted",
+             subtitle = "Linearity",
+             x = "Fitted Values",
+             y = "Residuals") +
+        theme_minimal()
+
+# PLOT 2 — Q-Q Plot (Normality) plot
+p2 <- ggplot(resid_df, aes(sample = residuals)) +
+        stat_qq(color = "steelblue", alpha = 0.5) +
+        stat_qq_line(color = "red", 
+                     linetype = "dashed", linewidth = 1) +
+        labs(title = "Normal Q-Q Plot",
+             subtitle = "Normality of Residuals",
+             x = "Theoretical Quantiles",
+             y = "Sample Quantiles") +
+        theme_minimal()
+# Scale-Location (Homoscedasticity) plot
+resid_df$sqrt_abs_resid <- sqrt(abs(resid_vals))
+
+p3 <- ggplot(resid_df, aes(x = fitted, y = sqrt_abs_resid)) +
+        geom_point(alpha = 0.5, color = "steelblue") +
+        geom_smooth(method = "loess", color = "red", 
+                    se = FALSE) +
+        labs(title = "Scale-Location",
+             subtitle = "Homoscedasticity",
+             x = "Fitted Values",
+             y = expression(sqrt("|Residuals|"))) +
+        theme_minimal()
+
+# Histogram of Residuals (Normality) plot
+
+p4 <- ggplot(resid_df, aes(x = residuals)) +
+        geom_histogram(fill = "steelblue", color = "white", 
+                       bins = 30) +
+        geom_vline(xintercept = 0, color = "red",
+                   linetype = "dashed", linewidth = 1) +
+        labs(title = "Histogram of Residuals",
+             subtitle = "Normality of Residuals",
+             x = "Residuals",
+             y = "Frequency") +
+        theme_minimal()
+#show all the plots together
+(grid.arrange(p1, p2, p3, p4, ncol = 2))
+```
+
+```         
+```
+
+@fig-diagnostic below presents four residual diagnostic plots for the final interaction model, used to assess the core assumptions of linear regression. The Residuals vs Fitted plot shows points randomly scattered around zero with the orange smooth line remaining close to the horizontal, indicating that the linearity assumption is reasonably satisfied. However, a slight pattern is visible at higher fitted values, suggesting mild non-linearity at the upper end of predicted home values.
+
+The Normal Q-Q plot shows that residuals follow the diagonal line reasonably well in the middle range, confirming approximate normality. However, both tails deviate from the line particularly the upper tail indicating the presence of heavy tails and some extreme residuals. The histogram of residuals supports this, showing an approximately bell-shaped distribution centered at zero but with a slight right skew and a few large positive residuals, suggesting mild departure from perfect normality.
+
+The Scale-Location plot reveals a slightly upward trending red line, indicating that the spread of residuals increases with fitted values. This suggests mild heteroscedasticity the variance of residuals is not perfectly constant across all fitted values, which is a minor violation of the homoscedasticity assumption. The assumptions of linearity and normality are reasonably satisfied, while mild heteroscedasticity is present. These violations are not severe enough to invalidate the model but suggest that a variance-stabilizing transformation such as a log transformation of medv could further improve model performance.
+
+## Conclusion
+
+This analysis set out to predict the median value of owner-occupied homes across Boston suburbs using multiple linear regression and regularization techniques. The AIC Stepwise model with an rm x lstat interaction term emerged as the best performing model, achieving a Test MSE of 13.5784 a substantial improvement over all additive models.
+
+Key Predictors of Median Home Value
+
+The analysis consistently identified (lstat) and (rm) as the most influential predictors across all models. Higher proportions of lower-status residents are strongly associated with lower home values, reflecting the well-established relationship between neighborhood socioeconomic status and property values. Conversely, a greater average number of rooms is associated with higher home values, capturing the effect of housing size on market value. Additional factors that negatively impact home values include high air pollution , greater distance from employment centers , higher pupil-teacher ratios , higher crime rates , and higher tax rates . Proximity to the Charles River (chas) and better highway accessibility (rad) positively contribute to home values. The variables indus and age were found to be statistically insignificant and were removed by both AIC and BIC stepwise selection, suggesting that industrial activity and housing age add little predictive value beyond what is already captured by the remaining predictors.
+
+Moreover the inclusion of the interaction term reduced the Test MSE from 22.5276 to 13.5784 and increased R² from 0.7289 to 0.7895, representing the single largest performance improvement across all models. This confirms that the value added by an additional room is significantly greater in wealthy neighborhoods (low lstat) than in poorer ones, and that room size and neighborhood socioeconomic status jointly determine home values rather than acting independently.
